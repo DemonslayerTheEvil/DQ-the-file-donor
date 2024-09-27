@@ -1,6 +1,6 @@
 import logging
 from pyrogram.errors import InputUserDeactivated, UserNotParticipant, FloodWait, UserIsBlocked, PeerIdInvalid, ChatAdminRequired
-from info import AUTH_CHANNEL, LONG_IMDB_DESCRIPTION, MAX_LIST_ELM, SHORTLINK_URL, SHORTLINK_API, LOG_CHANNEL, GRP_LNK, CHNL_LNK, CUSTOM_FILE_CAPTION, IS_VERIFY
+from info import AUTH_CHANNEL, LONG_IMDB_DESCRIPTION, MAX_LIST_ELM, SHORTLINK_URL, SHORTLINK_API, LOG_CHANNEL, GRP_LNK, CHNL_LNK, CUSTOM_FILE_CAPTION, IS_VERIFY, VERIFY2_URL, VERIFY2_API, PROTECT_CONTENT, HOW_TO_VERIFY
 from imdb import Cinemagoer 
 import asyncio
 from pyrogram.types import Message, InlineKeyboardButton, InlineKeyboardMarkup
@@ -50,20 +50,25 @@ class temp(object):
     KEYWORD = {}
 
 async def is_subscribed(bot, query=None, userid=None):
-    try:
-        if userid == None and query != None:
-            user = await bot.get_chat_member(AUTH_CHANNEL, query.from_user.id)
+    invite_links = []
+    for id in AUTH_CHANNEL:
+        try:
+            if userid == None and query != None:
+                chat = await bot.get_chat(id)
+                user = await bot.get_chat_member(id, query.from_user.id)
+            else:
+                chat = await bot.get_chat(id)
+                user = await bot.get_chat_member(AUTH_CHANNEL, int(userid))
+        except UserNotParticipant:
+            invite_links.append(chat.invite_link)
+        except Exception as e:
+            logger.exception(e)
+            continue
         else:
-            user = await bot.get_chat_member(AUTH_CHANNEL, int(userid))
-    except UserNotParticipant:
-        pass
-    except Exception as e:
-        logger.exception(e)
-    else:
-        if user.status != enums.ChatMemberStatus.BANNED:
-            return True
+            if user.status != enums.ChatMemberStatus.BANNED:
+                continue
 
-    return False
+    return invite_links
 
 async def get_poster(query, bulk=False, id=False, file=None):
     if not id:
@@ -490,14 +495,24 @@ async def get_shortlink(chat_id, link):
                         return data["shortenedUrl"]
                     else:
                         logger.error(f"Error: {data['message']}")
-                        return f'https://{URL}/api?api={API}&link={link}'
+                        if URL == 'clicksfly.com':
+                            return f'https://{URL}/api?api={API}&url={link}'
+                        else:
+                            return f'https://{URL}/api?api={API}&link={link}'
         except Exception as e:
             logger.error(e)
-            return f'https://{URL}/api?api={API}&link={link}'
+            if URL == 'clicksfly.com':
+                return f'https://{URL}/api?api={API}&url={link}'
+            else:
+                return f'https://{URL}/api?api={API}&link={link}'
 
-async def get_verify_shorted_link(link):
-    API = SHORTLINK_API
-    URL = SHORTLINK_URL
+async def get_verify_shorted_link(num, link):
+    if int(num) == 1:
+        API = SHORTLINK_API
+        URL = SHORTLINK_URL
+    else:
+        API = VERIFY2_API
+        URL = VERIFY2_URL
     https = link.split(":")[0]
     if "http" == https:
         https = "https"
@@ -532,14 +547,19 @@ async def get_verify_shorted_link(link):
                 async with session.get(url, params=params, raise_for_status=True, ssl=False) as response:
                     data = await response.json()
                     if data["status"] == "success":
-                        return data['shortenedUrl']
+                        return data["shortenedUrl"]
                     else:
                         logger.error(f"Error: {data['message']}")
-                        return f'https://{URL}/api?api={API}&link={link}'
-
+                        if URL == 'clicksfly.com':
+                            return f'https://{URL}/api?api={API}&url={link}'
+                        else:
+                            return f'https://{URL}/api?api={API}&link={link}'
         except Exception as e:
             logger.error(e)
-            return f'{URL}/api?api={API}&link={link}'
+            if URL == 'clicksfly.com':
+                return f'https://{URL}/api?api={API}&url={link}'
+            else:
+                return f'https://{URL}/api?api={API}&link={link}'
 
 async def check_token(bot, userid, token):
     user = await bot.get_users(userid)
@@ -564,42 +584,63 @@ async def get_token(bot, userid, link, fileid):
         await bot.send_message(LOG_CHANNEL, script.LOG_TEXT_P.format(user.id, user.mention))
     token = ''.join(random.choices(string.ascii_letters + string.digits, k=7))
     TOKENS[user.id] = {token: False}
-    link = f"{link}verify-{user.id}-{token}-{fileid}"
-    shortened_verify_url = await get_verify_shorted_link(link)
+    url = f"{link}verify-{user.id}-{token}-{fileid}"
+    status = await get_verify_status(user.id)
+    date_var = status["date"]
+    time_var = status["time"]
+    hour, minute, second = time_var.split(":")
+    year, month, day = date_var.split("-")
+    last_date, last_time = str((datetime(year=int(year), month=int(month), day=int(day), hour=int(hour), minute=int(minute), second=int(second)))-timedelta(hours=12)).split(" ")
+    tz = pytz.timezone('Asia/Kolkata')
+    curr_date, curr_time = str(datetime.now(tz)).split(" ")
+    if last_date == curr_date:
+        vr_num = 2
+    else:
+        vr_num = 1
+    shortened_verify_url = await get_verify_shorted_link(vr_num, url)
     return str(shortened_verify_url)
 
 async def send_all(bot, userid, files, ident):
-    if AUTH_CHANNEL and not await is_subscribed(bot=bot, userid=userid):
-        try:
-            invite_link = await bot.create_chat_invite_link(int(AUTH_CHANNEL))
-        except ChatAdminRequired:
-            logger.error("Mᴀᴋᴇ sᴜʀᴇ Bᴏᴛ ɪs ᴀᴅᴍɪɴ ɪɴ Fᴏʀᴄᴇsᴜʙ ᴄʜᴀɴɴᴇʟ")
-            return
+    invite_links = await is_subscribed(bot=bot, userid=userid)
+    btn = []
+    if AUTH_CHANNEL and len(invite_links) >= 1:
+        #this is written by tg: @programcrasher
+        for chnl_num, link in enumerate(invite_links, start=1):
+            if chnl_num == 1:
+                channel_num = "1sᴛ"
+            elif chnl_num == 2:
+                channel_num = "2ɴᴅ"
+            elif chnl_num == 3:
+                channel_num = "3ʀᴅ"
+            else:
+                channel_num = str(chnl_num)+"ᴛʜ"
+            btn.append([
+                InlineKeyboardButton(f"❆ Jᴏɪɴ {channel_num} Cʜᴀɴɴᴇʟ ❆", url=link)
+            ])
         if ident == 'filep' or 'checksubp':
             pre = 'checksubp'
         else:
             pre = 'checksub' 
-        btn = [[
-                InlineKeyboardButton("❆ Jᴏɪɴ Oᴜʀ Bᴀᴄᴋ-Uᴘ Cʜᴀɴɴᴇʟ ❆", url=invite_link.invite_link)
-            ],[
-                InlineKeyboardButton("↻ Tʀʏ Aɢᴀɪɴ", callback_data=f"{pre}#send_all")
-            ]]
+        btn.append([
+            InlineKeyboardButton("↻ Tʀʏ Aɢᴀɪɴ", callback_data=f"{pre}#send_all")
+        ])
         await bot.send_message(
             chat_id=userid,
-            text="**Yᴏᴜ ᴀʀᴇ ɴᴏᴛ ɪɴ ᴏᴜʀ Bᴀᴄᴋ-ᴜᴘ ᴄʜᴀɴɴᴇʟ ɢɪᴠᴇɴ ʙᴇʟᴏᴡ sᴏ ʏᴏᴜ ᴅᴏɴ'ᴛ ɢᴇᴛ ᴛʜᴇ ᴍᴏᴠɪᴇ ғɪʟᴇ...\n\nIғ ʏᴏᴜ ᴡᴀɴᴛ ᴛʜᴇ ᴍᴏᴠɪᴇ ғɪʟᴇ, ᴄʟɪᴄᴋ ᴏɴ ᴛʜᴇ '❆ Jᴏɪɴ Oᴜʀ Bᴀᴄᴋ-Uᴘ Cʜᴀɴɴᴇʟ ❆' ʙᴜᴛᴛᴏɴ ʙᴇʟᴏᴡ ᴀɴᴅ ᴊᴏɪɴ ᴏᴜʀ ʙᴀᴄᴋ-ᴜᴘ ᴄʜᴀɴɴᴇʟ, ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ᴛʜᴇ '↻ Tʀʏ Aɢᴀɪɴ' ʙᴜᴛᴛᴏɴ ʙᴇʟᴏᴡ...\n\nTʜᴇɴ ʏᴏᴜ ᴡɪʟʟ ɢᴇᴛ ᴛʜᴇ ᴍᴏᴠɪᴇ ғɪʟᴇs...**",
+            text="**Yᴏᴜ ᴀʀᴇ ɴᴏᴛ ɪɴ ᴏᴜʀ Bᴀᴄᴋ-ᴜᴘ ᴄʜᴀɴɴᴇʟs ɢɪᴠᴇɴ ʙᴇʟᴏᴡ sᴏ ʏᴏᴜ ᴅᴏɴ'ᴛ ɢᴇᴛ ᴛʜᴇ ᴍᴏᴠɪᴇ ғɪʟᴇ...\n\nIғ ʏᴏᴜ ᴡᴀɴᴛ ᴛʜᴇ ᴍᴏᴠɪᴇ ғɪʟᴇ, ᴄʟɪᴄᴋ ᴏɴ ᴛʜᴇ ɢɪᴠᴇɴ ʙᴜᴛᴛᴏɴs ʙᴇʟᴏᴡ ᴀɴᴅ ᴊᴏɪɴ ᴏᴜʀ ʙᴀᴄᴋ-ᴜᴘ ᴄʜᴀɴɴᴇʟs, ᴛʜᴇɴ ᴄʟɪᴄᴋ ᴏɴ ᴛʜᴇ '↻ Tʀʏ Aɢᴀɪɴ' ʙᴜᴛᴛᴏɴ ʙᴇʟᴏᴡ...\n\nTʜᴇɴ ʏᴏᴜ ᴡɪʟʟ ɢᴇᴛ ᴛʜᴇ ᴍᴏᴠɪᴇ ғɪʟᴇs...**",
             reply_markup=InlineKeyboardMarkup(btn),
             parse_mode=enums.ParseMode.MARKDOWN
-            )
+        )
         return 'fsub'
     
     if IS_VERIFY and not await check_verification(bot, userid):
         btn = [[
-            InlineKeyboardButton("Vᴇʀɪғʏ", url=await get_token(bot, userid, f"https://telegram.me/{temp.U_NAME}?start=", 'send_all'))
+            InlineKeyboardButton("Vᴇʀɪғʏ", url=await get_token(bot, userid, f"https://telegram.me/{temp.U_NAME}?start=", 'send_all')),
+            InlineKeyboardButton("Hᴏᴡ Tᴏ Vᴇʀɪғʏ", url=HOW_TO_VERIFY)
         ]]
         await bot.send_message(
             chat_id=userid,
             text="<b>Yᴏᴜ ᴀʀᴇ ɴᴏᴛ ᴠᴇʀɪғɪᴇᴅ!\nKɪɴᴅʟʏ ᴠᴇʀɪғʏ ᴛᴏ ᴄᴏɴᴛɪɴᴜᴇ Sᴏ ᴛʜᴀᴛ ʏᴏᴜ ᴄᴀɴ ɢᴇᴛ ᴀᴄᴄᴇss ᴛᴏ ᴜɴʟɪᴍɪᴛᴇᴅ ᴍᴏᴠɪᴇs ᴜɴᴛɪʟ 12 ʜᴏᴜʀs ғʀᴏᴍ ɴᴏᴡ !</b>",
-            protect_content=True,
+            protect_content=True if PROTECT_CONTENT else False,
             reply_markup=InlineKeyboardMarkup(btn)
         )
         return 'verify'
